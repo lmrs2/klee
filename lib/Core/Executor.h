@@ -101,6 +101,7 @@ public:
     Exec,
     External,
     Free,
+    Undefined,
     Model,
     Overflow,
     Ptr,
@@ -228,7 +229,7 @@ private:
 
   void initializeGlobalObject(ExecutionState &state, ObjectState *os, 
 			      const llvm::Constant *c,
-			      unsigned offset);
+			      unsigned offset, bool print = false/*debugging*/);
   void initializeGlobals(ExecutionState &state);
 
   void stepInstruction(ExecutionState &state);
@@ -307,10 +308,14 @@ private:
                               bool isWrite,
                               ref<Expr> address,
                               ref<Expr> value /* undef if read */,
-                              KInstruction *target /* undef if write */);
+                              KInstruction *target /* undef if write */,
+                              KInstruction * ki = 0/*debugging*/);
 
   void executeMakeSymbolic(ExecutionState &state, const MemoryObject *mo,
                            const std::string &name);
+  
+  void executeIgnoreUndefined(ExecutionState &state, const MemoryObject *mo, 
+                            const ObjectState *os);
 
   /// Create a new state where each input condition has been added as
   /// a constraint and return the results. The input state is included

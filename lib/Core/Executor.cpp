@@ -408,6 +408,9 @@ cl::opt<bool> DebugCheckForImpliedValues(
 
 } // namespace
 
+// testing
+bool CONCOLIC = false;
+
 namespace klee {
   RNG theRNG;
 }
@@ -423,6 +426,7 @@ const char *Executor::TerminateReasonNames[] = {
   [ Exec ] = "exec",
   [ External ] = "external",
   [ Free ] = "free",
+  [ Undefined ] = "undefined",
   [ Model ] = "model",
   [ Overflow ] = "overflow",
   [ Ptr ] = "ptr",
@@ -567,50 +571,56 @@ Executor::~Executor() {
 }
 
 /***/
-
+bool enteredDevMain = false;
 void Executor::initializeGlobalObject(ExecutionState &state, ObjectState *os,
                                       const Constant *c, 
-                                      unsigned offset) {
+                                      unsigned offset, const bool print) {
   const auto targetData = kmodule->targetData.get();
   if (const ConstantVector *cp = dyn_cast<ConstantVector>(c)) {
+    //if (print) errs() << "constant vector\n";
     unsigned elementSize =
       targetData->getTypeStoreSize(cp->getType()->getElementType());
     for (unsigned i=0, e=cp->getNumOperands(); i != e; ++i)
       initializeGlobalObject(state, os, cp->getOperand(i), 
-			     offset + i*elementSize);
+			     offset + i*elementSize, print);
   } else if (isa<ConstantAggregateZero>(c)) {
+    //if (print) errs() << "constant agg 0\n";
     unsigned i, size = targetData->getTypeStoreSize(c->getType());
     for (i=0; i<size; i++)
       os->write8(offset+i, (uint8_t) 0);
   } else if (const ConstantArray *ca = dyn_cast<ConstantArray>(c)) {
+    //if (print) errs() << "constant array\n";
     unsigned elementSize =
       targetData->getTypeStoreSize(ca->getType()->getElementType());
     for (unsigned i=0, e=ca->getNumOperands(); i != e; ++i)
       initializeGlobalObject(state, os, ca->getOperand(i), 
-			     offset + i*elementSize);
+			     offset + i*elementSize, print);
   } else if (const ConstantStruct *cs = dyn_cast<ConstantStruct>(c)) {
+    //if (print) errs() << "constant struct\n";
     const StructLayout *sl =
       targetData->getStructLayout(cast<StructType>(cs->getType()));
     for (unsigned i=0, e=cs->getNumOperands(); i != e; ++i)
       initializeGlobalObject(state, os, cs->getOperand(i), 
-			     offset + sl->getElementOffset(i));
+			     offset + sl->getElementOffset(i), print);
   } else if (const ConstantDataSequential *cds =
                dyn_cast<ConstantDataSequential>(c)) {
+    //if (print) errs() << "constant data seq\n";
     unsigned elementSize =
       targetData->getTypeStoreSize(cds->getElementType());
     for (unsigned i=0, e=cds->getNumElements(); i != e; ++i)
       initializeGlobalObject(state, os, cds->getElementAsConstant(i),
-                             offset + i*elementSize);
+                             offset + i*elementSize, print);
   } else if (!isa<UndefValue>(c) && !isa<MetadataAsValue>(c)) {
     unsigned StoreBits = targetData->getTypeStoreSizeInBits(c->getType());
     ref<ConstantExpr> C = evalConstant(c);
+    //if (print) errs() << "undef and meta\n";
 
     // Extend the constant if necessary;
     assert(StoreBits >= C->getWidth() && "Invalid store size!");
     if (StoreBits > C->getWidth())
       C = C->ZExt(StoreBits);
 
-    os->write(offset, C);
+    os->write(offset, C, print);
   }
 }
 
@@ -632,6 +642,7 @@ extern void *__dso_handle __attribute__ ((__weak__));
 
 void Executor::initializeGlobals(ExecutionState &state) {
   Module *m = kmodule->module.get();
+  //errs() << "initializeGlobals\n";
 
   if (m->getModuleInlineAsm() != "")
     klee_warning("executable has module level assembly (ignoring)");
@@ -694,6 +705,8 @@ void Executor::initializeGlobals(ExecutionState &state) {
   // allocate and initialize globals, done in two passes since we may
   // need address of a global in order to initialize some other one.
 
+  //errs() << "modules\n";
+
   // allocate memory objects for all globals
   for (Module::const_global_iterator i = m->global_begin(),
          e = m->global_end();
@@ -701,6 +714,7 @@ void Executor::initializeGlobals(ExecutionState &state) {
     const GlobalVariable *v = &*i;
     size_t globalObjectAlignment = getAllocationAlignment(v);
     if (i->isDeclaration()) {
+      //errs() << "isDeclaration:" << *i << "\n";
       // FIXME: We have no general way of handling unknown external
       // symbols. If we really cared about making external stuff work
       // better we could support user definition, or use the EXE style
@@ -751,10 +765,12 @@ void Executor::initializeGlobals(ExecutionState &state) {
           klee_error("unable to load symbol(%s) while initializing globals.", 
                      i->getName().data());
 
+        //errs() << "declaration global allocated/now writting " << os << "\n";
         for (unsigned offset=0; offset<mo->size; offset++)
           os->write8(offset, ((unsigned char*)addr)[offset]);
       }
     } else {
+      //errs() << "NOT Declaration:" << *i << "\n";
       Type *ty = i->getType()->getElementType();
       uint64_t size = kmodule->targetData->getTypeStoreSize(ty);
       MemoryObject *mo = memory->allocate(size, /*isLocal=*/false,
@@ -766,8 +782,16 @@ void Executor::initializeGlobals(ExecutionState &state) {
       globalObjects.insert(std::make_pair(v, mo));
       globalAddresses.insert(std::make_pair(v, mo->getBaseExpr()));
 
-      if (!i->hasInitializer())
-          os->initializeToRandom();
+      //errs() << "os:" << os << "\n";
+      if (!i->hasInitializer()) {
+        assert (0); // how can this have no initializer if it's a global? Let's catch and see if this happens
+        // if it's in .bss then this should be zero'ed out
+        //if (enteredDevMain) {
+          os->initializeToUndefined();
+        //}
+        //else
+        //os->initializeToRandom();
+      }
     }
   }
   
@@ -801,7 +825,7 @@ void Executor::initializeGlobals(ExecutionState &state) {
       assert(os);
       ObjectState *wos = state.addressSpace.getWriteable(mo, os);
       
-      initializeGlobalObject(state, wos, i->getInitializer(), 0);
+      initializeGlobalObject(state, wos, i->getInitializer(), 0, false);
       if (i->isConstant())
         constantObjects.emplace_back(wos);
     }
@@ -825,6 +849,7 @@ void Executor::branch(ExecutionState &state,
   unsigned N = conditions.size();
   assert(N);
 
+  //printf("Executor::branch, condition size:%zu\n", conditions.size());
   if (MaxForks!=~0u && stats::forks >= MaxForks) {
     unsigned next = theRNG.getInt32() % N;
     for (unsigned i=0; i<N; ++i) {
@@ -888,6 +913,23 @@ void Executor::branch(ExecutionState &state,
     if (OnlyReplaySeeds) {
       for (unsigned i=0; i<N; ++i) {
         if (result[i] && !seedMap.count(result[i])) {
+          /// TEST: want to know ehen this is called
+          //terminateState(*result[i]);
+          printf("branch() state early\n");
+          // assert(0);
+          // exit(-1);
+          /* concolic test */
+          // Note: is THIS wasteful? if we're supposed to only replay seeds,
+          // are we wasting time forking and checking is SMT solver can
+          // take the other branch
+          // TODO: see if we can optimize this. We may potentiall get a 2x speedup
+          // for replay
+          if (CONCOLIC) {
+            errs() << "writing test case for condition:" << conditions[i] << "\n";
+            addConstraint(*result[i], conditions[i]);
+            interpreterHandler->processTestCase(*result[i], 0, 0);
+          }
+
           terminateState(*result[i]);
           result[i] = NULL;
         }
@@ -1020,6 +1062,18 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
     if (!(trueSeed && falseSeed)) {
       assert(trueSeed || falseSeed);
       
+      /* test concolic: called for if-statements */
+      if (CONCOLIC) {
+        /* Note: we write the .ktest immediately. This has the benefit of free()'ing memory */
+        ExecutionState otherState(current);
+        //assert(otherState && "new ExecutionState(current) failed");
+        addConstraint(otherState, trueSeed ? Expr::createIsZero(condition) : condition);
+        // TODO: get value/process file and drop it
+        interpreterHandler->processTestCase(otherState, 0, 0); // TODO: maybe create our own terminate function
+        //terminateState(*otherState);
+        interpreterHandler->incPathsExplored(); // not sure this is correct
+      }
+
       res = trueSeed ? Solver::True : Solver::False;
       addConstraint(current, trueSeed ? condition : Expr::createIsZero(condition));
     }
@@ -1093,6 +1147,8 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
     }
 
     processTree->attach(current.ptreeNode, falseState, trueState);
+
+    //errs() << "fork split. false:"
 
     if (pathWriter) {
       // Need to update the pathOS.id field of falseState, otherwise the same id
@@ -1622,6 +1678,8 @@ Function* Executor::getTargetFunction(Value *calledVal, ExecutionState &state) {
 
 void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   Instruction *i = ki->inst;
+  if (!enteredDevMain)
+    enteredDevMain = (i->getParent()->getParent()->getName() == "__klee_posix_wrapped_main");
   switch (i->getOpcode()) {
     // Control flow
   case Instruction::Ret: {
@@ -2262,7 +2320,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   case Instruction::Store: {
     ref<Expr> base = eval(ki, 1, state).value;
     ref<Expr> value = eval(ki, 0, state).value;
-    executeMemoryOperation(state, true, base, value, 0);
+    executeMemoryOperation(state, true, base, value, 0, ki);
     break;
   }
 
@@ -2748,6 +2806,7 @@ void Executor::updateStates(ExecutionState *current) {
       seedMap.find(es);
     if (it3 != seedMap.end())
       seedMap.erase(it3);
+    //errs() << "removing in updateStates:" << es->ptreeNode << "\n";
     processTree->remove(es->ptreeNode);
     delete es;
   }
@@ -2877,7 +2936,7 @@ void Executor::doDumpStates() {
 
 void Executor::run(ExecutionState &initialState) {
   bindModuleConstants();
-
+//errs() << "bindModules\n";
   // Delay init till now so that ticks don't accrue during optimization and such.
   timers.reset();
 
@@ -3044,6 +3103,7 @@ void Executor::terminateState(ExecutionState &state) {
     if (it3 != seedMap.end())
       seedMap.erase(it3);
     addedStates.erase(it);
+    //errs() << "remove tree:" << state.ptreeNode << "\n";
     processTree->remove(state.ptreeNode);
     delete &state;
   }
@@ -3243,7 +3303,17 @@ void Executor::callExternalFunction(ExecutionState &state,
       ConstantExpr::create((uint64_t)errno_addr, Expr::Int64), result);
   if (!resolved)
     klee_error("Could not resolve memory object for errno");
-  ref<Expr> errValueExpr = result.second->read(0, sizeof(*errno_addr) * 8);
+  //errs() << "call1\n";
+  unsigned undefinedOffset = 0;
+  ref<Expr> errValueExpr = result.second->read(0, sizeof(*errno_addr) * 8, undefinedOffset);
+  assert (!errValueExpr.isNull());
+  // if (errValueExpr.isNull()) {
+  //   errs() << "UNDEFINED 1\n";
+  //   errs() << "inst:" << *target->inst << "\n";
+  //   errs() << "parent:" << *target->inst->getParent() << "\n";
+  //   terminateStateOnError(state, "read non-initialized memory", Undefined);
+  //   return;
+  // }
   ConstantExpr *errnoValue = dyn_cast<ConstantExpr>(errValueExpr);
   if (!errnoValue) {
     terminateStateOnExecError(state,
@@ -3356,6 +3426,10 @@ void Executor::executeAlloc(ExecutionState &state,
                             const ObjectState *reallocFrom,
                             size_t allocationAlignment) {
   size = toUnique(state, size);
+  // if (isa<CallInst>(target->inst) && enteredDevMain) {
+  //   errs() << "executeAlloc:" << *target->inst << "\n";
+  //   errs() << "size:" << size << ", zeroMemory:" << zeroMemory << "\n";
+  // }
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(size)) {
     const llvm::Value *allocSite = state.prevPC->inst;
     if (allocationAlignment == 0) {
@@ -3370,16 +3444,45 @@ void Executor::executeAlloc(ExecutionState &state,
     } else {
       ObjectState *os = bindObjectInState(state, mo, isLocal);
       if (zeroMemory) {
+        //if (enteredDevMain) errs() << "initializeToZero\n";
         os->initializeToZero();
       } else {
-        os->initializeToRandom();
+        //os->initializeToRandom();
+        //  WithPOSIXRuntime; frm main.cpp
+        // __user_main
+        
+        // if (!enteredDevMain)
+        //   enteredDevMain = (target->inst->getParent()->getParent()->getName() == "__klee_posix_wrapped_main");
+        
+        
+        // if (enteredDevMain) {
+        //   if (isa<CallInst>(target->inst)) {
+        //     errs() << "calling initializeToUndefined on " << os << "\n";
+        //     errs() << "inst:" << *target->inst << "\n";
+        //     errs() << "parent:" << *target->inst->getParent() << "\n";
+        //   }
+        //   //os->initializeToUndefined();
+        // }
+
+        os->initializeToUndefined();
+        //else
+        //  os->initializeToRandom();
       }
       bindLocal(target, state, mo->getBaseExpr());
       
       if (reallocFrom) {
+        //errs() << "realloc from\n";
         unsigned count = std::min(reallocFrom->size, os->size);
-        for (unsigned i=0; i<count; i++)
-          os->write(i, reallocFrom->read8(i));
+        for (unsigned i=0; i<count; i++) {
+          ref<Expr> tmp = reallocFrom->read8(i);
+          //errs() << "tmp:" << tmp.isNull() << "\n";
+          if (!tmp.isNull()) { // undefined ? we only copy bytes that are initialized since it's OK to realloc() a non-init'ed buffer
+            //errs() << "tmp:" << tmp << "\n";
+            os->write(i, tmp);
+          }
+        }
+        //errs() << "end realloc\n";
+        
         state.addressSpace.unbindObject(reallocFrom->getObject());
       }
     }
@@ -3402,6 +3505,10 @@ void Executor::executeAlloc(ExecutionState &state,
     assert(success && "FIXME: Unhandled solver failure");
     (void) success;
     
+    // if (enteredDevMain) {
+    //   errs() << "example:" << example << "\n";
+    // }
+
     // Try and start with a small example.
     Expr::Width W = example->getWidth();
     while (example->Ugt(ConstantExpr::alloc(128, W))->isTrue()) {
@@ -3415,8 +3522,43 @@ void Executor::executeAlloc(ExecutionState &state,
       example = tmp;
     }
 
+    // if (enteredDevMain) {
+    //   errs() << "example:" << example << "\n";
+    // }
+
+    // get proper non-zero value
+    uint64_t example_val = example->getZExtValue();
+    if (example_val > 0 && true /* user option:TODO */) { // non-zero value
+      bool res;
+      bool success = solver->mustBeTrue(state, EqExpr::create(example, size), res);
+      assert(success && "FIXME: Unhandled solver failure");      
+      (void) success;
+      if (!res) { // the value is not defined completely so let's try the non-zero value provided by user (hardcoded to 64/16 for now)
+        assert (example_val <= (uint64_t)(-1)/16 && "size overflow");
+        ref<ConstantExpr> tmp = ConstantExpr::alloc(example_val == 1 ? 64 : example_val*16, W);
+        bool success = solver->mayBeTrue(state, EqExpr::create(example, size), res);
+        assert(success && "FIXME: Unhandled solver failure");      
+        (void) success;
+        if (res) {
+          example = tmp;
+          example_val = example->getZExtValue();
+        }
+        else
+          klee_warning("Ignoring allocation size from user");
+        // if (enteredDevMain) {
+        //   errs() << "example2:" << example << "\n";
+        // }
+      }
+    }
+    // end proper non-zero value
+
     StatePair fixedSize = fork(state, EqExpr::create(example, size), true);
-    
+    // if (enteredDevMain) {
+    //   errs() << "first:" << fixedSize.first << " second:" << fixedSize.second << "\n";
+    //   // if (fixedSize)
+    //   //   errs() << "first size:"; *fixedSize.first->print(); << "\n";
+    // }
+
     if (fixedSize.second) { 
       // Check for exactly two values
       ref<ConstantExpr> tmp;
@@ -3447,17 +3589,44 @@ void Executor::executeAlloc(ExecutionState &state,
         
         if (hugeSize.second) {
 
-          std::string Str;
-          llvm::raw_string_ostream info(Str);
-          ExprPPrinter::printOne(info, "  size expr", size);
-          info << "  concretization : " << example << "\n";
-          info << "  unbound example: " << tmp << "\n";
-          terminateStateOnError(*hugeSize.second, "concretized symbolic size",
+          if (example_val != 0) {
+            std::string Str;// I think this is irrelevant. I keep it for debugging purposes, but I thik we could just terminate the state?
+            llvm::raw_string_ostream info(Str);
+            ExprPPrinter::printOne(info, "  size expr", size);
+            info << "  concretization : " << example << "\n";
+            info << "  unbound example: " << tmp << "\n";
+            terminateStateOnError(*hugeSize.second, "concretized symbolic size", // message makes no sense
                                 Model, NULL, info.str());
+          } else {
+            klee_warning("Concretizing symbolic size to be non-zero"); // message irrelevant
+            //ref<Expr> nonZeroSize = EqExpr::create(ConstantExpr::alloc(0, Expr::Bool), EqExpr::create(ConstantExpr::alloc(m, W), size));
+            ref<Expr> nonZeroSize = UgtExpr::create(size, ConstantExpr::alloc(example_val, W));
+            errs() << "addConstraint after non-zero concretized: " << nonZeroSize << "\n";
+            addConstraint(*hugeSize.second, nonZeroSize);
+
+            // std::string Str;
+            // llvm::raw_string_ostream info(Str);
+            // ExprPPrinter::printOne(info, "  size expr", size);
+            // info << "  concretization : " << example << "\n";
+            // info << "  unbound example: " << tmp << "\n";
+            // terminateStateOnError(*hugeSize.second, "concretized symbolic size",
+            //                     Model, NULL, info.str());
+
+            //errs() << "concretized to " << nonZeroSize << "\n"; 
+            //assert(0);
+            // TODO: have KLEE option to enable this
+            //errs() << "second alloc:" << size << "\n";
+            executeAlloc(*hugeSize.second, size, isLocal, 
+                     target, zeroMemory, reallocFrom);
+          }
+        } else {
+          //errs() << "no huge size other:" << example << "\n";
         }
       }
     }
 
+    // Note: assume malloc returns non-NULL pointer for zero size, otherwise we should terminate the state if the NULL
+    // pointer was already returned above
     if (fixedSize.first) // can be zero when fork fails
       executeAlloc(*fixedSize.first, example, isLocal, 
                    target, zeroMemory, reallocFrom);
@@ -3525,11 +3694,13 @@ void Executor::resolveExact(ExecutionState &state,
   }
 }
 
+bool printme = false;
 void Executor::executeMemoryOperation(ExecutionState &state,
                                       bool isWrite,
                                       ref<Expr> address,
                                       ref<Expr> value /* undef if read */,
-                                      KInstruction *target /* undef if write */) {
+                                      KInstruction *target /* undef if write */,
+                                      KInstruction * ki/*debugging*/) {
   Expr::Width type = (isWrite ? value->getWidth() : 
                      getWidthForLLVMType(target->inst->getType()));
   unsigned bytes = Expr::getMinBytesForWidth(type);
@@ -3582,11 +3753,110 @@ void Executor::executeMemoryOperation(ExecutionState &state,
                                 ReadOnly);
         } else {
           ObjectState *wos = state.addressSpace.getWriteable(mo, os);
+          // TODO: if constant: this helps to keep offset concrete/undefined mem
+          // otherwise all region becomes symbolic, but in the case of a buf = malloc(x) then buf[x-1] = 0 we're losing info
+          // we try to set the offset constant if we can, to eliminate treating the entire buffer as symbolic if somes bytes are undefined
+          offset = toUnique(state, offset);
+          // if (enteredDevMain) {
+          //   errs() << "calling getWriteable() on " << os << " -> " << wos << "\n";
+          //   errs() << "calling write() on " << wos << " at offset " << offset << " with " << value << "\n";
+          //   if (ki) {
+          //     errs() << "inst:" << *ki->inst << "\n";
+          //     errs() << "parent:" << *ki->inst->getParent() << "\n";
+          //   }
+          // }
           wos->write(offset, value);
         }          
       } else {
-        ref<Expr> result = os->read(offset, type);
+
+        if (target->inst->getParent()->getParent()->getName() == "amalloc") {
+          printme = true;
+        }
         
+        // if (printme) {
+        //   errs() << "call2 on " << os << "\n";
+        //   errs() << "inst:" << *target->inst << "\n";
+        // }
+        ref<Expr> result(0);
+        unsigned undefinedOffset = -1;
+        offset = toUnique(state, offset); // same reason as above: we try to set the offset constant if we can, to eliminate treating the entire buffer as symbolic if somes bytes are undefined
+        /* TODO: if ConstantExpr same
+         if not constant expr: then we should get the size of object and for each concrete offset, check if the 
+         offset can take the value AND the byte is undefined. If so, then we concretize this offset and terminate the state
+        */
+        
+        if (!isa<ConstantExpr>(offset)) {
+          errs() << "non constant check " << mo->size << "\n";
+          // klee_warning("non constant check %u", mo->size);
+          // for each byte, check if undefined first, because it's cheap
+          for (unsigned i=0; i<mo->size; i++) {
+            //errs() << "offset " << i << " for state " << &state << "\n";
+            if (os->isByteUndefined(i)) {
+              //errs() << " undefined\n";
+              bool res;
+
+              ref<Expr> the_offset = ZExtExpr::create(offset, Expr::Int32);
+              ref<Expr> the_undefined = ConstantExpr::create(i, Expr::Int32);
+              // errs() << "the_offset1:" << the_offset << " " << the_offset->getWidth() << "\n";
+              // errs() << "the_undefined1:" << the_undefined << " " << the_undefined->getWidth() << "\n";
+              ref<Expr> e = EqExpr::create(the_offset, the_undefined);
+
+              bool success = solver->mayBeTrue(state, e, res);
+              assert(success && "FIXME: Unhandled solver failure");
+              (void) success;
+              if (res) {
+                undefinedOffset = i;
+                break;
+              }
+            }
+          }
+        }
+        //errs() << "passed " << &state << "\n";
+        // if it's not undefined, read
+        if (undefinedOffset == (unsigned)-1)
+          result = os->read(offset, type, undefinedOffset);
+
+        if (result.isNull()) {
+          // errs() << "UNDEFINED 2 " << undefinedOffset << "\n";
+          // errs() << "call2 on " << os << "\n";
+          // errs() << "inst:" << *target->inst << "\n";
+          // errs() << "parent:" << *target->inst->getParent() << "\n";
+
+          // std::string Str;
+          // llvm::raw_string_ostream info(Str);
+          // ExprPPrinter::printOne(info, "  size expr", size);
+          // info << "  concretization : " << example << "\n";
+          // info << "  unbound example: " << tmp << "\n";
+          // terminateStateOnError(*hugeSize.second, "concretized symbolic size",
+          //                       Model, NULL, info.str());
+          //terminateStateOnError(state, "read non-initialized memory", Undefined);
+          // create new state with the undefinedoffset constraint and terminate it
+          
+          ref<Expr> the_offset = ZExtExpr::create(offset, Expr::Int32);
+          ref<Expr> the_undefined = ConstantExpr::create(undefinedOffset, Expr::Int32);
+          // errs() << "the_offset1:" << the_offset << " " << the_offset->getWidth() << "\n";
+          // errs() << "the_undefined1:" << the_undefined << " " << the_undefined->getWidth() << "\n";
+          ref<Expr> e = EqExpr::create(the_offset,the_undefined);
+          //errs() << "adding constraint1:" << e << "\n";
+          
+          // HACK: sometimes we're trying to add a constaint that cannot be true.. Why?
+          // that was a bug :)
+          // cna get rid off this code below since we're setting the offset as constant if we can
+          // bool result;
+          // bool success = solver->mayBeTrue(state, e, result);
+          // assert(success && "FIXME: Unhandled solver failure");
+          // (void) success;
+          // if (result) {
+          errs() << "addConstraint1: offset=" <<  offset << "undefined_offset=" << the_undefined << "\n";
+          addConstraint(state, e);
+          //}
+
+          terminateStateOnError(state, "read non-initialized memory", Undefined);
+
+          return;
+          //errs() << "parent name:" << target->inst->getParent()->getName() << "\n";
+        }
+        printme = false;
         if (interpreterOpts.MakeConcreteSymbolic)
           result = replaceReadWithSymbolic(state, result);
         
@@ -3629,8 +3899,35 @@ void Executor::executeMemoryOperation(ExecutionState &state,
           wos->write(mo->getOffsetExpr(address), value);
         }
       } else {
-        ref<Expr> result = os->read(mo->getOffsetExpr(address), type);
-        bindLocal(target, *bound, result);
+        //errs() << "call3\n";
+        unsigned undefinedOffset = 0;
+        ref<Expr> result = os->read(mo->getOffsetExpr(address), type, undefinedOffset);
+        if (result.isNull()) {
+          // errs() << "UNDEFINED3: " << undefinedOffset << "\n";
+          // errs() << "address:" << address << "\n";
+          // errs() << "offset expr:" << mo->getOffsetExpr(address) << "\n";
+          // errs() << "call3 on " << os << "\n";
+          // errs() << "inst:" << *target->inst << "\n";
+          // errs() << "parent:" << *target->inst->getParent() << "\n";
+
+          // add a constraint before terminating the state
+          ref<Expr> the_offset = ZExtExpr::create(mo->getOffsetExpr(address), Expr::Int32);
+          ref<Expr> the_undefined = ConstantExpr::create(undefinedOffset, Expr::Int32);
+          // errs() << "the_offset3:" << the_offset << " " << the_offset->getWidth() << "\n";
+          // errs() << "the_undefined3:" << the_undefined << " " << the_undefined->getWidth() << "\n";
+          ref<Expr> e = EqExpr::create(the_offset,the_undefined);
+          //errs() << "adding constraint3:" << e << "\n";
+          
+          // WARNING: the generated values may still be beyong. Maybe no need to generate here
+          errs() << "addConstraint3\n";
+          addConstraint(*bound, e);
+          terminateStateOnError(*bound, "read non-initialized memory", Undefined);
+
+          // not sure we need to generate a ktest here...
+//          terminateState(*bound);
+        } else {
+          bindLocal(target, *bound, result);
+        }
       }
     }
 
@@ -3648,6 +3945,19 @@ void Executor::executeMemoryOperation(ExecutionState &state,
                             NULL, getAddressInfo(*unbound, address));
     }
   }
+}
+
+void Executor::executeIgnoreUndefined(ExecutionState &state, const MemoryObject *mo, const ObjectState *os) {
+  
+  if (!state.addressSpace.copyInConcrete(nullptr, os, 0)) {
+    terminateStateOnError(state, "external modified read-only object",
+                          External);
+    return;
+  }
+  
+  ObjectState *wos = state.addressSpace.getWriteable(mo, os);
+  wos->ignoreUndefined();
+
 }
 
 void Executor::executeMakeSymbolic(ExecutionState &state, 
@@ -3732,6 +4042,7 @@ void Executor::runFunctionAsMain(Function *f,
 				 char **argv,
 				 char **envp) {
   std::vector<ref<Expr> > arguments;
+  //errs() << "runFunctionAsMain: " << f->get
 
   // force deterministic initialization of memory objects
   srand(1);
@@ -3819,6 +4130,7 @@ void Executor::runFunctionAsMain(Function *f,
   initializeGlobals(*state);
 
   processTree = std::make_unique<PTree>(state);
+  //errs() << "calling run()\n";
   run(*state);
   processTree = nullptr;
 

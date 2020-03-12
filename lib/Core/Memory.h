@@ -185,6 +185,9 @@ private:
   // mutable because may need flushed during read of const
   mutable BitArray *flushMask;
 
+  // non-initialized memory
+  BitArray *undefinedMask;
+
   ref<Expr> *knownSymbolics;
 
   // mutable because we may need flush during read of const
@@ -216,13 +219,15 @@ public:
   void initializeToZero();
   // make contents all concrete and random
   void initializeToRandom();
+  // make the content undefined, ie non-initialized
+  void initializeToUndefined();
 
-  ref<Expr> read(ref<Expr> offset, Expr::Width width) const;
-  ref<Expr> read(unsigned offset, Expr::Width width) const;
+  ref<Expr> read(ref<Expr> offset, Expr::Width width, unsigned & undefinedOffset) const;
+  ref<Expr> read(unsigned offset, Expr::Width width, unsigned & undefinedOffset) const;
   ref<Expr> read8(unsigned offset) const;
 
   // return bytes written.
-  void write(unsigned offset, ref<Expr> value);
+  void write(unsigned offset, ref<Expr> value, bool print = false/*debugging*/);
   void write(ref<Expr> offset, ref<Expr> value);
 
   void write8(unsigned offset, uint8_t value);
@@ -230,6 +235,7 @@ public:
   void write32(unsigned offset, uint32_t value);
   void write64(unsigned offset, uint64_t value);
   void print() const;
+  bool isByteUndefined(unsigned offset, bool print = false/*debugging*/) const;
 
   /*
     Looks at all the symbolic bytes of this object, gets a value for them
@@ -238,6 +244,8 @@ public:
   void flushToConcreteStore(TimingSolver *solver,
                             const ExecutionState &state) const;
 
+  void ignoreUndefined();
+
 private:
   const UpdateList &getUpdates() const;
 
@@ -245,7 +253,7 @@ private:
 
   void makeSymbolic();
 
-  ref<Expr> read8(ref<Expr> offset) const;
+  ref<Expr> read8(ref<Expr> offset, unsigned & undefinedOffset) const;
   void write8(unsigned offset, ref<Expr> value);
   void write8(ref<Expr> offset, ref<Expr> value);
 
@@ -258,6 +266,7 @@ private:
   bool isByteFlushed(unsigned offset) const;
   bool isByteKnownSymbolic(unsigned offset) const;
 
+  void markByteDefined(unsigned offset);
   void markByteConcrete(unsigned offset);
   void markByteSymbolic(unsigned offset);
   void markByteFlushed(unsigned offset);

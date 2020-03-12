@@ -109,6 +109,7 @@ static SpecialFunctionHandler::HandlerInfo handlerInfo[] = {
   add("klee_stack_trace", handleStackTrace, false),
   add("klee_warning", handleWarning, false),
   add("klee_warning_once", handleWarningOnce, false),
+  add("klee_ignore_undefined", handleIgnoreUndefined, false),
   add("malloc", handleMalloc, true),
   add("memalign", handleMemalign, true),
   add("realloc", handleRealloc, true),
@@ -230,6 +231,54 @@ bool SpecialFunctionHandler::handle(ExecutionState &state,
 
 /****/
 
+// reads a concrete size from memory
+bool SpecialFunctionHandler::validateObjectSizeAtAddress(ExecutionState &state, ref<Expr> addressExpr, ref<Expr> sizeExpr) {
+
+  ObjectPair op;
+  addressExpr = executor.toUnique(state, addressExpr);
+  if (!isa<ConstantExpr>(addressExpr)) {
+    executor.terminateStateOnError(
+        state, "Symbolic address passed to one of the klee_ functions",
+        Executor::TerminateReason::User);
+    return false;
+  }
+
+  sizeExpr = executor.toUnique(state, sizeExpr);
+  if (!isa<ConstantExpr>(sizeExpr)) {
+    executor.terminateStateOnError(
+        state, "Symbolic size passed to one of the klee_ functions",
+        Executor::TerminateReason::User);
+    return false;
+  }
+
+  ref<ConstantExpr> address = cast<ConstantExpr>(addressExpr);
+  if (!state.addressSpace.resolveOne(address, op)) {
+    executor.terminateStateOnError(
+        state, "Invalid address passed to one of the klee_ functions",
+        Executor::TerminateReason::User);
+    return false;
+  }
+
+  bool res __attribute__ ((unused));
+  assert(executor.solver->mustBeTrue(state, 
+                                     EqExpr::create(address, 
+                                                    op.first->getBaseExpr()),
+                                     res) &&
+         res &&
+         "XXX interior pointer unhandled");
+  
+  assert(op.second->size == op.first->size);
+
+  if (cast<ConstantExpr>(sizeExpr)->getZExtValue() != op.second->size) {
+    executor.terminateStateOnError(
+        state, "Invalid size passed to one of the klee_ functions",
+        Executor::TerminateReason::User);
+    return false;
+  }
+
+ return true;
+}
+
 // reads a concrete string from memory
 std::string 
 SpecialFunctionHandler::readStringAtAddress(ExecutionState &state, 
@@ -262,14 +311,27 @@ SpecialFunctionHandler::readStringAtAddress(ExecutionState &state,
   char *buf = new char[mo->size];
 
   unsigned i;
-  for (i = 0; i < mo->size - 1; i++) {
+  bool zero = false;
+  for (i = 0; i < mo->size; i++) {
     ref<Expr> cur = os->read8(i);
+    if (cur.isNull())
+      break;
     cur = executor.toUnique(state, cur);
     assert(isa<ConstantExpr>(cur) && 
            "hit symbolic char while reading concrete string");
     buf[i] = cast<ConstantExpr>(cur)->getZExtValue(8);
+    if (buf[i] == '\0') {
+      zero = true;
+      break;
+    }
   }
-  buf[i] = 0;
+  
+  if (!zero) {
+    executor.terminateStateOnError(
+        state, "Invalid string (missing trailing '\\0') passed to one of the klee_ functions",
+        Executor::TerminateReason::User);
+    return "";
+  }
   
   std::string result(buf);
   delete[] buf;
@@ -630,7 +692,10 @@ void SpecialFunctionHandler::handleGetErrno(ExecutionState &state,
   if (!resolved)
     executor.terminateStateOnError(state, "Could not resolve address for errno",
                                    Executor::User);
-  executor.bindLocal(target, state, result.second->read(0, Expr::Int32));
+  unsigned undefinedOffset = 0;
+  ref<Expr> value = result.second->read(0, Expr::Int32, undefinedOffset);
+  assert (!value.isNull());
+  executor.bindLocal(target, state, value);
 }
 
 void SpecialFunctionHandler::handleErrnoLocation(
@@ -769,6 +834,36 @@ void SpecialFunctionHandler::handleDefineFixedObject(ExecutionState &state,
   MemoryObject *mo = executor.memory->allocateFixed(address, size, state.prevPC->inst);
   executor.bindObjectInState(state, mo, false);
   mo->isUserSpecified = true; // XXX hack;
+}
+
+void SpecialFunctionHandler::handleIgnoreUndefined(ExecutionState &state,
+                                  KInstruction *target,
+                                  std::vector<ref<Expr> > &arguments) {
+  assert(arguments.size()==2 &&
+         "invalid number of arguments to klee_make_initialized");
+
+  if (!validateObjectSizeAtAddress(state, arguments[0], arguments[1])) 
+    return;
+
+  Executor::ExactResolutionList rl;
+  executor.resolveExact(state, arguments[0], rl, "make_initialized");
+
+  for (Executor::ExactResolutionList::iterator it = rl.begin(), 
+         ie = rl.end(); it != ie; ++it) {
+    const MemoryObject *mo = it->first.first;
+    
+    const ObjectState *os = it->first.second;
+    ExecutionState *s = it->second;
+    
+    if (os->readOnly) {
+      executor.terminateStateOnError(*s, "cannot make readonly object initialized",
+                                     Executor::User);
+      return;
+    } 
+
+   executor.executeIgnoreUndefined(*s, mo, os);
+
+ }
 }
 
 void SpecialFunctionHandler::handleMakeSymbolic(ExecutionState &state,

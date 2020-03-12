@@ -94,7 +94,8 @@ namespace klee {
     /* Convenience routines */
 
     std::string readStringAtAddress(ExecutionState &state, ref<Expr> address);
-    
+    bool validateObjectSizeAtAddress(ExecutionState &state, ref<Expr> address, ref<Expr> size);
+
     /* Handlers */
 
 #define HANDLER(name) void name(ExecutionState &state, \
@@ -117,6 +118,7 @@ namespace klee {
     HANDLER(handleGetValue);
     HANDLER(handleIsSymbolic);
     HANDLER(handleMakeSymbolic);
+    HANDLER(handleIgnoreUndefined);
     HANDLER(handleMalloc);
     HANDLER(handleMemalign);
     HANDLER(handleMarkGlobal);

@@ -36,6 +36,15 @@ extern "C" {
    */
   void klee_make_symbolic(void *addr, size_t nbytes, const char *name);
 
+  /* klee_ignore_undefined - Make the contents of the object pointer to by \arg
+   * addr defined with the value currently at the address.
+   *
+   * \arg addr - The start of the object.
+   * \arg nbytes - The number of bytes to make symbolic; currently this *must*
+   * be the entire contents of the object.
+   */
+  void klee_ignore_undefined(void *addr, size_t nbytes);
+  
   /* klee_range - Construct a symbolic value in the signed interval
    * [begin,end).
    *

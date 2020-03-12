@@ -321,6 +321,11 @@ bool AddressSpace::copyInConcretes() {
 
 bool AddressSpace::copyInConcrete(const MemoryObject *mo, const ObjectState *os,
                                   uint64_t src_address) {
+  if (!mo) {
+    mo = os->getObject();
+    src_address = mo->address;
+  }
+  
   auto address = reinterpret_cast<std::uint8_t*>(src_address);
   if (memcmp(address, os->concreteStore, mo->size) != 0) {
     if (os->readOnly) {
