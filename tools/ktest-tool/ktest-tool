@@ -71,9 +71,8 @@ class KTest:
         hdr = f.read(5)
         if len(hdr) != 5 or (hdr != b'KTEST' and hdr != b'BOUT\n'):
             raise KTestError('unrecognized file')
-        d = f.read(4)
-        print("d:" + str(d))
-        version, = struct.unpack('>i', d)
+        
+        version, = struct.unpack('>i', f.read(4))
         if version > version_no:
             raise KTestError('unrecognized version')
         numArgs, = struct.unpack('>i', f.read(4))
@@ -96,8 +95,6 @@ class KTest:
             name = f.read(size).decode('utf-8')
             size, = struct.unpack('>i', f.read(4))
             bytes = f.read(size)
-            print(name)
-            print(bytes )
             objects.append((name, bytes))
 
         # Create an instance
@@ -160,8 +157,6 @@ class KTest:
 
             name_found = True
             f = open(self.path + '.' + name, 'wb')
-            print(name)
-            print(data)
             blob = data.rstrip(b'\x00') if trim_zeros else data
             #print(len(blob))
             f.write(blob)
