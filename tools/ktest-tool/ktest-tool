@@ -15,6 +15,7 @@ import io
 import string
 import struct
 import sys
+import os
 
 version_no = 3
 
@@ -27,7 +28,40 @@ class KTest:
     valid_chars = string.digits + string.ascii_letters + string.punctuation + ' '
 
     @staticmethod
-    def fromfile(path):
+    def frombfile(path, object_names, program_args):
+        # default model version
+        version = 3
+        
+        objects = []
+        for objname in object_names:
+            try:
+                apath = path + "." + objname
+                f = open(apath, 'rb')
+            except IOError:
+                print('ERROR: file %s not found' % apath)
+                sys.exit(1)
+
+            objsize = os.path.getsize(apath)
+            if objsize == 0:
+                raise KTestError('file %s is empty' % apath)
+
+            data = f.read(objsize)
+            #print(objname + ":" + str(objsize) + ":" + str(data))
+
+            symArgvs = 0
+            symArgvLen = 0
+
+            numArgs = len(program_args)
+            args = program_args
+            
+            objects.append((objname, data))
+
+        # Create an instance
+        b = KTest(version, path, args, symArgvs, symArgvLen, objects)
+        return b
+
+    @staticmethod
+    def fromkfile(path):
         try:
             f = open(path, 'rb')
         except IOError:
@@ -37,7 +71,9 @@ class KTest:
         hdr = f.read(5)
         if len(hdr) != 5 or (hdr != b'KTEST' and hdr != b'BOUT\n'):
             raise KTestError('unrecognized file')
-        version, = struct.unpack('>i', f.read(4))
+        d = f.read(4)
+        print("d:" + str(d))
+        version, = struct.unpack('>i', d)
         if version > version_no:
             raise KTestError('unrecognized version')
         numArgs, = struct.unpack('>i', f.read(4))
@@ -60,6 +96,8 @@ class KTest:
             name = f.read(size).decode('utf-8')
             size, = struct.unpack('>i', f.read(4))
             bytes = f.read(size)
+            print(name)
+            print(bytes )
             objects.append((name, bytes))
 
         # Create an instance
@@ -115,16 +153,51 @@ class KTest:
         return sio.getvalue()
 
     def extract(self, object_names, trim_zeros):
+        name_found = False
         for name, data in self.objects:
             if name not in object_names:
                 continue
 
+            name_found = True
             f = open(self.path + '.' + name, 'wb')
+            print(name)
+            print(data)
             blob = data.rstrip(b'\x00') if trim_zeros else data
+            #print(len(blob))
             f.write(blob)
             f.close()
+        if not name_found:
+            raise KTestError('unrecognized object name %s in file %s' % (name, self.path))
 
 
+    def create(self, trim_zeros):
+        f = open(self.path, 'wb')
+        # header
+        f.write(b'KTEST')
+        # version
+        f.write(struct.pack('>i', self.version))
+        # arguments
+        f.write(struct.pack('>i', len(self.args)))
+        for arg in self.args:
+            argval = arg.encode(encoding='ascii')
+            f.write(struct.pack('>i', len(argval)))
+            f.write(argval)
+        # not used, I think
+        f.write(struct.pack('>i', self.symArgvs))
+        f.write(struct.pack('>i', self.symArgvLen))
+        # objects
+        f.write(struct.pack('>i', len(self.objects)))
+        for obj in self.objects:
+            name,bytes = obj
+            name = name.encode('utf-8')
+            f.write(struct.pack('>i', len(name)))
+            f.write(name)
+            f.write(struct.pack('>i', len(bytes)))
+            blob = bytes.rstrip(b'\x00') if trim_zeros else bytes
+            f.write(blob)
+
+        f.close()
+        
 
 def main():
     epilog = """
@@ -148,7 +221,7 @@ def main():
             text: data as ascii text, '.' for non-printable characters
 
         example:
-          > ktest-tool klee-last/test000003.ktest
+          > ktest-tool display klee-last/test000003.ktest
           ktest file : 'klee-last/test000003.ktest'
           args       : ['get_sign.bc']
           num objects: 1
@@ -159,24 +232,54 @@ def main():
           object 0: int : -2147483648
           object 0: uint: 2147483648
           object 0: text: ....
+
+        example:
+          > ktest-tool extract klee-last/test000003.ktest --objects model_version a
+
+          example:
+          > ktest-tool create klee-last/test000003.ktest --args '\\-\\-arg1' '\\-arg2' get_sign.bc --objects a b
     """
 
     from argparse import ArgumentParser, RawDescriptionHelpFormatter
     from textwrap import dedent
 
     ap = ArgumentParser(prog='ktest-tool', formatter_class=RawDescriptionHelpFormatter, epilog=dedent(epilog))
-    ap.add_argument('--trim-zeros', help='trim trailing zeros', action='store_true')
-    ap.add_argument('--extract', help='write binary value of object into file', metavar='name', nargs=1, action='append')
-    ap.add_argument('files', help='a .ktest file', metavar='file', nargs='+')
+
+    cmd = ap.add_subparsers(dest='cmd')
+
+    extract_ap = cmd.add_parser('extract')
+    extract_ap.add_argument('--objects', help='object name to extract', metavar='objname', nargs='+', required=True)
+    extract_ap.add_argument('--trim-zeros', help='trim trailing zeros', action='store_true')
+    extract_ap.add_argument('files', help='an input file', metavar='file', nargs='+')
+
+    display_ap = cmd.add_parser('display')
+    display_ap.add_argument('--trim-zeros', help='trim trailing zeros', action='store_true')
+    display_ap.add_argument('files', help='an input file', metavar='file', nargs='+')
+
+    create_ap = cmd.add_parser('create')
+    create_ap.add_argument('--args', help='arguments of the program under analysis', metavar='args', nargs='+', required=True)
+    create_ap.add_argument('--objects', help='object name to create', metavar='objname', nargs='+', required=True)
+    create_ap.add_argument('--trim-zeros', help='trim trailing zeros', action='store_true')
+    create_ap.add_argument('files', help='an input file', metavar='file', nargs='+')
+
     args = ap.parse_args()
+    #print(args)
+    if args.cmd is None:
+        ap.print_help(sys.stderr)
+        sys.exit(1)
 
     for file in args.files:
-        ktest = KTest.fromfile(file)
-        if args.extract:
-            ktest.extract({x for xs in args.extract for x in xs}, args.trim_zeros)
+        if args.cmd == 'extract':
+            ktest = KTest.fromkfile(file)
+            ktest.extract({x for x in args.objects}, args.trim_zeros)
+        elif args.cmd == 'create':
+            ktest = KTest.frombfile(file, args.objects, [arg.replace('\\','') for arg in args.args])
+            ktest.create(args.trim_zeros)
         else:
+            ktest = KTest.fromkfile(file)
             fmt = '{:trimzeros}' if args.trim_zeros else '{}'
             print(fmt.format(ktest), end='')
+        
 
 
 if __name__ == '__main__':
