@@ -34,6 +34,7 @@
 
 void klee_warning(const char*);
 void klee_warning_once(const char*);
+void klee_ignore_undefined(void *, size_t);
 
 /* Silent ignore */
 
@@ -156,6 +157,7 @@ int clock_gettime(clockid_t clk_id, struct timespec *res) {
   /* Fake */
   struct timeval tv;
   gettimeofday(&tv, NULL);
+  klee_ignore_undefined(&tv, sizeof(tv));
   res->tv_sec = tv.tv_sec;
   res->tv_nsec = tv.tv_usec * 1000;
   return 0;
@@ -171,6 +173,7 @@ int clock_settime(clockid_t clk_id, const struct timespec *res) {
 time_t time(time_t *t) {
   struct timeval tv;
   gettimeofday(&tv, NULL);
+  klee_ignore_undefined(&tv, sizeof(tv));
   if (t)
     *t = tv.tv_sec;
   return tv.tv_sec;
