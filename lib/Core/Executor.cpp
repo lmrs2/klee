@@ -2856,7 +2856,14 @@ void Executor::checkMemoryUsage() {
 
           std::swap(arr[idx], arr[N - 1]);
           terminateStateEarly(*arr[N - 1], "Memory limit exceeded.");
+
+          timers.invoke();
+          if (haltExecution) {
+            klee_warning("leaving loop");
+            break;
+          }
         }
+        klee_warning("done killing %d states");
       }
       atMemoryLimit = true;
     } else {
