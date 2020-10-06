@@ -160,6 +160,15 @@ namespace {
                    cl::desc("Issue a warning on startup for all external symbols (default=false)."),
                    cl::cat(StartCat));
   
+  cl::opt<bool>
+  OutputFormatBinary("output-format-binary",
+                   cl::desc("Output files in binary format rather than ktest (default=false)."),
+                   cl::cat(StartCat));
+
+  cl::opt<std::string>
+  OutputSymbolicName("output-symbolic-name",
+           cl::desc("Symbolic variable name to output if -output-format-binary options is true."),
+           cl::cat(StartCat));
 
   /*** Linking options ***/
 
@@ -486,24 +495,43 @@ void KleeHandler::processTestCase(const ExecutionState &state,
     unsigned id = ++m_numTotalTests;
 
     if (success) {
-      KTest b;
-      b.numArgs = m_argc;
-      b.args = m_argv;
-      b.symArgvs = 0;
-      b.symArgvLen = 0;
-      b.numObjects = out.size();
-      b.objects = new KTestObject[b.numObjects];
-      assert(b.objects);
-      for (unsigned i=0; i<b.numObjects; i++) {
-        KTestObject *o = &b.objects[i];
-        o->name = const_cast<char*>(out[i].first.c_str());
-        o->numBytes = out[i].second.size();
-        o->bytes = new unsigned char[o->numBytes];
-        assert(o->bytes);
-        std::copy(out[i].second.begin(), out[i].second.end(), o->bytes);
+      if (OutputFormatBinary) {
+        bool nameFound = false;
+        unsigned nbObjects = out.size();
+        assert(nbObjects);
+        for (unsigned i=0; i<b.numObjects; i++) {
+          KTestObject *o = &b.objects[i];
+          o->name = const_cast<char*>(out[i].first.c_str());
+          o->numBytes = out[i].second.size();
+          o->bytes = new unsigned char[o->numBytes];
+          assert(o->bytes);
+          if (OutputSymbolicName == o->name) {
+            assert(!nameFound);
+            nameFound = true;
+            std::copy(out[i].second.begin(), out[i].second.end(), o->bytes);
+          }
+        }
+        assert(nameFound);
+      } else {
+        KTest b;
+        b.numArgs = m_argc;
+        b.args = m_argv;
+        b.symArgvs = 0;
+        b.symArgvLen = 0;
+        b.numObjects = out.size();
+        b.objects = new KTestObject[b.numObjects];
+        assert(b.objects);
+        for (unsigned i=0; i<b.numObjects; i++) {
+          KTestObject *o = &b.objects[i];
+          o->name = const_cast<char*>(out[i].first.c_str());
+          o->numBytes = out[i].second.size();
+          o->bytes = new unsigned char[o->numBytes];
+          assert(o->bytes);
+          std::copy(out[i].second.begin(), out[i].second.end(), o->bytes);
+        }
       }
 
-      if (!kTest_toFile(&b, getOutputFilename(getTestFilename("ktest", id)).c_str())) {
+      if (!kTest_toFile(&b, getOutputFilename(getTestFilename(OutputFormatBinary ? "bin" : "ktest", id)).c_str())) {
         klee_warning("unable to write output test case, losing it");
       } else {
         ++m_numGeneratedTests;
@@ -1145,6 +1173,10 @@ int main(int argc, char **argv, char **envp) {
 #else
   sys::PrintStackTraceOnErrorSignal();
 #endif
+
+  if (OutputFormatBinary && OutputSymbolicName == "") {
+    klee_error("-output-format-binary used without -output-symbolic-name");
+  }
 
   if (Watchdog) {
     if (MaxTime.empty()) {
