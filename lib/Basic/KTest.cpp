@@ -225,7 +225,7 @@ int bTest_toFile(unsigned char * bytes, const unsigned length, const char *path)
   if (!f) 
     goto error;
 
-  if (fwrite(KTESbytesT_MAGIC, length, 1, f)!=1)
+  if (fwrite(bytes, length, 1, f)!=1)
     goto error;
 
   fclose(f);
