@@ -495,11 +495,18 @@ void KleeHandler::processTestCase(const ExecutionState &state,
     unsigned id = ++m_numTotalTests;
 
     if (success) {
+      KTest b;
+      b.numArgs = m_argc;
+      b.args = m_argv;
+      b.symArgvs = 0;
+      b.symArgvLen = 0;
+      b.numObjects = out.size();
+      b.objects = new KTestObject[b.numObjects];
+      assert(b.objects);
+
       if (OutputFormatBinary) {
         bool nameFound = false;
-        unsigned nbObjects = out.size();
-        assert(nbObjects);
-        for (unsigned i=0; i<nbObjects; i++) {
+        for (unsigned i=0; i<b.objects; i++) {
           KTestObject *o = &b.objects[i];
           o->name = const_cast<char*>(out[i].first.c_str());
           o->numBytes = out[i].second.size();
@@ -518,14 +525,6 @@ void KleeHandler::processTestCase(const ExecutionState &state,
           ++m_numGeneratedTests;
         }
       } else {
-        KTest b;
-        b.numArgs = m_argc;
-        b.args = m_argv;
-        b.symArgvs = 0;
-        b.symArgvLen = 0;
-        b.numObjects = out.size();
-        b.objects = new KTestObject[b.numObjects];
-        assert(b.objects);
         for (unsigned i=0; i<b.numObjects; i++) {
           KTestObject *o = &b.objects[i];
           o->name = const_cast<char*>(out[i].first.c_str());
@@ -541,8 +540,6 @@ void KleeHandler::processTestCase(const ExecutionState &state,
           ++m_numGeneratedTests;
         }
       }
-
-      
 
       for (unsigned i=0; i<b.numObjects; i++)
         delete[] b.objects[i].bytes;
