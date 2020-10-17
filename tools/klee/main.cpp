@@ -523,6 +523,7 @@ void KleeHandler::processTestCase(const ExecutionState &state,
             }
           }
         }
+        assert(nameFound);
       } else {
         for (unsigned i=0; i<b.numObjects; i++) {
           KTestObject *o = &b.objects[i];
