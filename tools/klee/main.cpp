@@ -499,7 +499,7 @@ void KleeHandler::processTestCase(const ExecutionState &state,
         bool nameFound = false;
         unsigned nbObjects = out.size();
         assert(nbObjects);
-        for (unsigned i=0; i<b.numObjects; i++) {
+        for (unsigned i=0; i<nbObjects; i++) {
           KTestObject *o = &b.objects[i];
           o->name = const_cast<char*>(out[i].first.c_str());
           o->numBytes = out[i].second.size();
