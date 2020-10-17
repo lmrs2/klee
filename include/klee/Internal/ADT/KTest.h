@@ -48,6 +48,9 @@ extern "C" {
 
   /* returns 1 on success, 0 on (unspecified) error */
   int   kTest_toFile(KTest *, const char *path);
+
+  /* returns 1 on success, 0 on (unspecified) error */
+  int   bTest_toFile(unsigned char * bytes, const unsigned length, const char *path);
   
   /* returns total number of object bytes */
   unsigned kTest_numBytes(KTest *);

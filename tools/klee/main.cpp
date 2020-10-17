@@ -506,16 +506,16 @@ void KleeHandler::processTestCase(const ExecutionState &state,
 
       if (OutputFormatBinary) {
         bool nameFound = false;
-        for (unsigned i=0; i<b.objects; i++) {
+        for (unsigned i=0; i<b.numObjects; i++) {
           KTestObject *o = &b.objects[i];
           o->name = const_cast<char*>(out[i].first.c_str());
           o->numBytes = out[i].second.size();
           o->bytes = new unsigned char[o->numBytes];
+          std::copy(out[i].second.begin(), out[i].second.end(), o->bytes);
           assert(o->bytes);
           if (OutputSymbolicName == o->name) {
             assert(!nameFound);
             nameFound = true;
-            std::copy(out[i].second.begin(), out[i].second.end(), o->bytes);
             if (!bTest_toFile(o->bytes, o->numBytes, getOutputFilename(getTestFilename("bin", id)).c_str())) {
               klee_warning("unable to write output test case, losing it");
             } else {
