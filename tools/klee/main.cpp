@@ -512,6 +512,11 @@ void KleeHandler::processTestCase(const ExecutionState &state,
           }
         }
         assert(nameFound);
+        if (!bTest_toFile(o->bytes, o->numBytes, getOutputFilename(getTestFilename("bin", id)).c_str())) {
+          klee_warning("unable to write output test case, losing it");
+        } else {
+          ++m_numGeneratedTests;
+        }
       } else {
         KTest b;
         b.numArgs = m_argc;
@@ -529,13 +534,15 @@ void KleeHandler::processTestCase(const ExecutionState &state,
           assert(o->bytes);
           std::copy(out[i].second.begin(), out[i].second.end(), o->bytes);
         }
+
+        if (!kTest_toFile(&b, getOutputFilename(getTestFilename("ktest", id)).c_str())) {
+          klee_warning("unable to write output test case, losing it");
+        } else {
+          ++m_numGeneratedTests;
+        }
       }
 
-      if (!kTest_toFile(&b, getOutputFilename(getTestFilename(OutputFormatBinary ? "bin" : "ktest", id)).c_str())) {
-        klee_warning("unable to write output test case, losing it");
-      } else {
-        ++m_numGeneratedTests;
-      }
+      
 
       for (unsigned i=0; i<b.numObjects; i++)
         delete[] b.objects[i].bytes;

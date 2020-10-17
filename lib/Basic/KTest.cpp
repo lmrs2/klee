@@ -219,6 +219,24 @@ int kTest_toFile(KTest *bo, const char *path) {
   return 0;
 }
 
+int bTest_toFile(unsigned char * bytes, const unsigned length, const char *path) {
+  FILE *f = fopen(path, "wb");
+
+  if (!f) 
+    goto error;
+
+  if (fwrite(KTESbytesT_MAGIC, length, 1, f)!=1)
+    goto error;
+
+  fclose(f);
+
+  return 1;
+ error:
+  if (f) fclose(f);
+  
+  return 0;
+}
+
 unsigned kTest_numBytes(KTest *bo) {
   unsigned i, res = 0;
   for (i=0; i<bo->numObjects; i++)
