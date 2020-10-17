@@ -516,13 +516,12 @@ void KleeHandler::processTestCase(const ExecutionState &state,
             assert(!nameFound);
             nameFound = true;
             std::copy(out[i].second.begin(), out[i].second.end(), o->bytes);
+            if (!bTest_toFile(o->bytes, o->numBytes, getOutputFilename(getTestFilename("bin", id)).c_str())) {
+              klee_warning("unable to write output test case, losing it");
+            } else {
+              ++m_numGeneratedTests;
+            }
           }
-        }
-        assert(nameFound);
-        if (!bTest_toFile(o->bytes, o->numBytes, getOutputFilename(getTestFilename("bin", id)).c_str())) {
-          klee_warning("unable to write output test case, losing it");
-        } else {
-          ++m_numGeneratedTests;
         }
       } else {
         for (unsigned i=0; i<b.numObjects; i++) {
